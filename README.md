@@ -51,3 +51,7 @@ Wikimedia media have individual licenses; retain displayed attribution/license i
 
 ## 1,000-topic catalog
 This build contains 1,000 stable prompt records derived from 200 curated source subjects × five visual lenses (Form, Material, Detail, Context, System). Each lens has its own stable ID for Seen/Saved history while resolving details to the source Wikipedia article. This avoids fragile invented article URLs while creating a large concept-art exploration pool.
+
+
+## Rabbit-hole expansion
+Added 500 unique canonical subjects spanning Internet culture, lost media, obscure technologies, unusual places, cryptography, outsider art, visual perception, folklore, scientific curiosities, experimental communities, maps, interfaces, and conceptual rabbit holes. Catalog total: 924 canonical subjects.

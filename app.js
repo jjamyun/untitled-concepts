@@ -106,7 +106,117 @@ function detailParagraphs(text){
 
 let TOPICS=[],current=null,currentWiki=null,currentImages=[],session=[],sessionIndex=-1,libraryTab='all';const $=s=>document.querySelector(s);const dbp=new Promise((resolve,reject)=>{const r=indexedDB.open('field-note',1);r.onupgradeneeded=()=>{const db=r.result;if(!db.objectStoreNames.contains('history'))db.createObjectStore('history',{keyPath:'id'})};r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(r.error)});async function getAll(){const db=await dbp;return new Promise((res,rej)=>{const r=db.transaction('history').objectStore('history').getAll();r.onsuccess=()=>res(r.result);r.onerror=()=>rej(r.error)})}async function getRec(id){const db=await dbp;return new Promise(res=>{const r=db.transaction('history').objectStore('history').get(id);r.onsuccess=()=>res(r.result)})}async function putRec(rec){const db=await dbp;return new Promise((res,rej)=>{const r=db.transaction('history','readwrite').objectStore('history').put(rec);r.onsuccess=res;r.onerror=()=>rej(r.error)})}async function markSeen(t){let r=await getRec(t.id)||{id:t.id,title:t.title,saved:false,timesViewed:0};r.title=t.title;if(!r.firstSeen)r.firstSeen=new Date().toISOString();r.lastSeen=new Date().toISOString();r.timesViewed=(r.timesViewed||0)+1;await putRec(r)}async function toggleSave(e){e?.stopPropagation();let r=await getRec(current.id)||{id:current.id,title:current.title,timesViewed:1,firstSeen:new Date().toISOString()};r.saved=!r.saved;await putRec(r);await updateBookmark()}async function updateBookmark(){const r=await getRec(current.id),b=$('#bookmarkBtn');b.classList.toggle('saved',!!r?.saved);b.setAttribute('aria-pressed',String(!!r?.saved))}
 async function wikiHtml(t){const r=await fetch('https://en.wikipedia.org/w/rest.php/v1/page/'+encodeURIComponent(t.wikiTitle)+'/html');if(!r.ok)throw Error();return r.text()}
-async function wiki(t){const r=await fetch('https://en.wikipedia.org/api/rest_v1/page/summary/'+encodeURIComponent(t.wikiTitle));if(!r.ok)throw Error();return r.json()}async function wikiLong(t){const p=new URLSearchParams({action:'query',prop:'extracts',explaintext:'1',exsectionformat:'plain',redirects:'1',titles:t.wikiTitle,format:'json',origin:'*'});const r=await fetch('https://en.wikipedia.org/w/api.php?'+p),j=await r.json();return Object.values(j.query?.pages||{})[0]?.extract||''}async function commons(q,limit=12){const p=new URLSearchParams({action:'query',generator:'search',gsrsearch:q,gsrnamespace:'6',gsrlimit:String(limit),prop:'imageinfo',iiprop:'url|extmetadata',iiurlwidth:String(window.matchMedia('(max-width:600px)').matches?900:1400),format:'json',origin:'*'});const r=await fetch('https://commons.wikimedia.org/w/api.php?'+p),j=await r.json();return Object.values(j.query?.pages||{}).filter(x=>x.imageinfo?.[0]?.thumburl).map(x=>{const i=x.imageinfo[0],m=i.extmetadata||{};return{url:i.thumburl,artist:(m.Artist?.value||'Wikimedia Commons').replace(/<[^>]*>/g,''),license:m.LicenseShortName?.value||''}})}function categoryLabel(t){const parts=t.category.split('·').map(x=>x.trim()).filter(Boolean);return parts.length>1?`${parts[0]} / ${parts.slice(1).join(' · ')}`:`${parts[0]} / Reference`}function setHero(im){if(!im)return;$('#hero').classList.add('image-loading');$('#hero').src=im.url;$('#hero').onload=()=>$('#hero').classList.remove('image-loading');$('#hero').alt=current.title;$('#imageCredit').textContent=[im.artist,im.license].filter(Boolean).join(' · ')}async function showTopic(t,{mark=true}={}){current=t;currentWiki=null;currentImages=[];$('#endCard').classList.add('hidden');$('#card').classList.remove('hidden');$('.nav-actions').classList.remove('hidden');$('#headerCategory').textContent=categoryLabel(t);$('#region').textContent=t.region;$('#era').textContent=t.era;$('#title').textContent=t.title;$('#desc').textContent='Loading…';$('#hero').removeAttribute('src');$('#imageCredit').textContent='';if(mark)await markSeen(t);await updateBookmark();updateNav();wiki(t).then(w=>{if(current?.id!==t.id)return;currentWiki=w;$('#desc').textContent=w.extract||w.description||'Tap More to explore this subject.';if(w.thumbnail?.source&&!$('#hero').src)setHero({url:w.thumbnail.source,artist:'Wikipedia / Wikimedia',license:''})}).catch(()=>{if(current?.id===t.id)$('#desc').textContent='Could not reach Wikipedia. Check your connection.'});commons(t.commonsSearch,2).then(imgs=>{if(current?.id!==t.id)return;currentImages=imgs;if(imgs[0])setHero(imgs[0])}).catch(()=>{})}function updateNav(){$('#prevBtn').disabled=sessionIndex<=0}async function nextTopic(){if(sessionIndex<session.length-1){sessionIndex++;return showTopic(session[sessionIndex],{mark:false})}const seen=new Set((await getAll()).filter(x=>x.firstSeen).map(x=>x.id)),left=TOPICS.filter(t=>!seen.has(t.id));if(!left.length){$('#card').classList.add('hidden');$('.nav-actions').classList.add('hidden');$('#endCard').classList.remove('hidden');animateEndCard();return}const t=left[Math.floor(Math.random()*left.length)];session.push(t);sessionIndex=session.length-1;await showTopic(t)}async function prevTopic(){if(sessionIndex<=0)return;sessionIndex--;await showTopic(session[sessionIndex],{mark:false})}function openSheet(html){const sh=$('#sheet');if(!html.includes('<h1>Library</h1>'))sh.classList.remove('library-open');$('#sheetContent').innerHTML=html;sh.showModal()}function expandedHeader(t){return `<h1>${t.title}</h1><div class="sheet-kicker">${categoryLabel(t)}</div><div class="detail-meta">${t.region} — ${t.era}</div>`}
+async function wiki(t){
+ const width=matchMedia('(max-width:600px)').matches?900:1400;
+ const q=new URLSearchParams({
+  action:'query',format:'json',formatversion:'2',origin:'*',
+  titles:t.wikiTitle,redirects:'1',
+  prop:'extracts|description|pageimages',
+  exintro:'1',explaintext:'1',
+  piprop:'thumbnail',pithumbsize:String(width)
+ });
+ const r=await fetch('https://en.wikipedia.org/w/api.php?'+q);
+ if(!r.ok)throw Error('Wikipedia unavailable');
+ const j=await r.json(),pg=j.query?.pages?.[0];
+ if(!pg || pg.missing)throw Error('Wikipedia page missing');
+ return {title:pg.title,extract:pg.extract||'',description:pg.description||'',thumbnail:pg.thumbnail||null};
+}
+async function pageLeadImage(t){
+ const width=matchMedia('(max-width:600px)').matches?900:1400;
+ const q=new URLSearchParams({action:'query',format:'json',origin:'*',titles:t.wikiTitle,prop:'pageimages',piprop:'thumbnail|name',pithumbsize:String(width),pilicense:'free'});
+ const j=await fetch('https://en.wikipedia.org/w/api.php?'+q).then(r=>r.json());
+ const pg=Object.values(j.query?.pages||{})[0];
+ return pg?.thumbnail?.source?{url:pg.thumbnail.source,desc:t.title,artist:'Wikipedia / Wikimedia Commons',license:'',page:null}:null;
+}
+function usefulFileTitle(x){const s=(x||'').toLowerCase();return !(/\.(svg|ogg|ogv|webm)$/i.test(s)||/icon|logo|symbol|question book|ambox|commons-logo|speaker|map marker|crystal clear|folder|portal/.test(s))}
+
+function subjectTokens(t){
+ const stop=new Set(['the','of','and','people','culture','art','architecture','traditional','tradition','history','ancient']);
+ return String(t.wikiTitle||t.title||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'')
+   .replace(/[^a-z0-9 ]/g,' ').split(/\s+/).filter(x=>x.length>=3&&!stop.has(x));
+}
+function mediaRelevance(t,item){
+ const hay=((item.title||'')+' '+(item.desc||'')).toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');
+ const toks=subjectTokens(t); if(!toks.length)return 0;
+ let hits=0;for(const x of toks)if(hay.includes(x))hits++;
+ return hits/toks.length;
+}
+async function pageMedia(t,limit=10){
+ const r=await fetch('https://en.wikipedia.org/w/rest.php/v1/page/'+encodeURIComponent(t.wikiTitle)+'/links/media');if(!r.ok)throw Error('media');
+ const j=await r.json();const titles=(j.files||[]).map(f=>f.title||f.key||f).filter(x=>typeof x==='string'&&usefulFileTitle(x)).slice(0,80);if(!titles.length)return[];
+ const width=matchMedia('(max-width:600px)').matches?900:1400;
+ let all=[];
+ // MediaWiki titles query has practical URL limits, so resolve in small batches.
+ for(let n=0;n<titles.length;n+=15){
+  const q=new URLSearchParams({action:'query',format:'json',origin:'*',titles:titles.slice(n,n+15).join('|'),prop:'imageinfo',iiprop:'url|extmetadata',iiurlwidth:String(width)});
+  try{
+   const d=await fetch('https://commons.wikimedia.org/w/api.php?'+q).then(r=>r.json());
+   all.push(...Object.values(d.query?.pages||{}).filter(x=>x.imageinfo?.[0]?.thumburl).map(x=>{const i=x.imageinfo[0],m=i.extmetadata||{};return{title:x.title,url:i.thumburl,desc:(m.ImageDescription?.value||'').replace(/<[^>]*>/g,''),artist:(m.Artist?.value||'Wikimedia Commons').replace(/<[^>]*>/g,''),license:m.LicenseShortName?.value||'',page:i.descriptionurl}}));
+  }catch(_){}
+ }
+ return all.map(x=>({...x,score:mediaRelevance(t,x)})).filter(x=>x.score>=0.5).sort((a,b)=>b.score-a.score).slice(0,limit);
+}
+async function strictCommonsFallback(t,limit=10){
+ // Exact canonical title in quotes. Results are still filtered by filename/description relevance.
+ const results=await commons('"'+t.wikiTitle+'"',Math.max(limit*2,10));
+ return results.map(x=>({...x,title:x.desc||'',score:mediaRelevance(t,{title:x.desc||'',desc:x.desc||''})})).filter(x=>x.score>=0.5).slice(0,limit);
+}
+async function strictImages(t,limit=10){
+ let lead=null,media=[];try{lead=await pageLeadImage(t)}catch(_){}try{media=await pageMedia(t,limit)}catch(_){}
+ const out=[];if(lead)out.push(lead);for(const im of media)if(!out.some(x=>x.url===im.url))out.push(im);
+ if(out.length>1)return out.slice(0,limit);
+ // Do not pad with generic article media. A strict exact-subject Commons fallback may add a few.
+ try{for(const im of await strictCommonsFallback(t,limit))if(!out.some(x=>x.url===im.url))out.push(im)}catch(_){}
+ return out.slice(0,limit);
+}
+
+async function parsedArticleHtml(t){
+ const q=new URLSearchParams({action:'parse',format:'json',formatversion:'2',origin:'*',page:t.wikiTitle,redirects:'1',prop:'text'});
+ const j=await fetch('https://en.wikipedia.org/w/api.php?'+q).then(r=>r.json());
+ return j.parse?.text||'';
+}
+async function exactArticleImages(t,limit=10){
+ const q=new URLSearchParams({
+  action:'parse',format:'json',formatversion:'2',origin:'*',
+  page:t.wikiTitle,redirects:'1',prop:'text'
+ });
+ try{
+  const j=await fetch('https://en.wikipedia.org/w/api.php?'+q).then(r=>r.json());
+  const html=j.parse?.text;if(!html)return[];
+  const doc=new DOMParser().parseFromString(html,'text/html');
+
+  // Remove navigation/reference/metadata regions before selecting actual article figures.
+  doc.querySelectorAll([
+   '.hatnote','.navbox','.vertical-navbox','.metadata','.ambox','.reflist',
+   '.references','.mw-references-wrap','.catlinks','.sistersitebox','.portal',
+   '.authority-control','.mw-editsection','table.infobox','table.sidebar',
+   '[role="navigation"]','[role="note"]'
+  ].join(',')).forEach(n=>n.remove());
+
+  const out=[],seen=new Set();
+  // Only genuine MediaWiki file figures/thumbnails rendered in this article.
+  const figures=[...doc.querySelectorAll('figure[typeof*="mw:File"], figure[typeof*="mw:Image"], .thumb')];
+  for(const fig of figures){
+   const img=fig.querySelector('img.mw-file-element, img');
+   const link=fig.querySelector('a.mw-file-description');
+   if(!img || !link)continue;
+   let src=img.getAttribute('srcset')?.split(',').pop()?.trim().split(/\s+/)[0] || img.getAttribute('src');
+   if(!src)continue;
+   if(src.startsWith('//'))src='https:'+src;
+   else if(src.startsWith('/'))src='https://en.wikipedia.org'+src;
+   if(!/^https?:/.test(src)||seen.has(src))continue;
+   const cap=(fig.querySelector('figcaption,.thumbcaption')?.textContent||'').replace(/\s+/g,' ').trim();
+   const alt=(img.getAttribute('alt')||'').replace(/\s+/g,' ').trim();
+   const href=link.getAttribute('href')||'';
+   // No re-query by filename: this exact src is what the article rendered.
+   seen.add(src);
+   out.push({url:src,desc:cap||alt||t.title,artist:'Wikipedia / Wikimedia Commons',license:'See source article',page:href?new URL(href,'https://en.wikipedia.org').href:null});
+   if(out.length>=limit)break;
+  }
+  return out;
+ }catch(_){return[]}
+}
+async function commons(q,limit=12){const p=new URLSearchParams({action:'query',generator:'search',gsrsearch:q,gsrnamespace:'6',gsrlimit:String(limit),prop:'imageinfo',iiprop:'url|extmetadata',iiurlwidth:String(window.matchMedia('(max-width:600px)').matches?900:1400),format:'json',origin:'*'});const r=await fetch('https://commons.wikimedia.org/w/api.php?'+p),j=await r.json();return Object.values(j.query?.pages||{}).filter(x=>x.imageinfo?.[0]?.thumburl).map(x=>{const i=x.imageinfo[0],m=i.extmetadata||{};return{url:i.thumburl,artist:(m.Artist?.value||'Wikimedia Commons').replace(/<[^>]*>/g,''),license:m.LicenseShortName?.value||''}})}function categoryLabel(t){const parts=t.category.split('·').map(x=>x.trim()).filter(Boolean);return parts.length>1?`${parts[0]} / ${parts.slice(1).join(' · ')}`:`${parts[0]} / Reference`}function setHero(im){if(!im)return;$('#hero').classList.add('image-loading');$('#hero').src=im.url;$('#hero').onload=()=>$('#hero').classList.remove('image-loading');$('#hero').alt=current.title;$('#imageCredit').textContent=[im.artist,im.license].filter(Boolean).join(' · ')}async function showTopic(t,{mark=true}={}){current=t;currentWiki=null;currentImages=[];$('#endCard').classList.add('hidden');$('#card').classList.remove('hidden');$('.nav-actions').classList.remove('hidden');$('#headerCategory').textContent=categoryLabel(t);$('#region').textContent=t.region;$('#era').textContent=t.era;$('#title').textContent=t.title;$('#desc').textContent='Loading…';$('#hero').removeAttribute('src');$('#imageCredit').textContent='';if(mark)await markSeen(t);await updateBookmark();updateNav();wiki(t).then(w=>{if(current?.id!==t.id)return;currentWiki=w;$('#desc').textContent=w.extract||w.description||'Tap More to explore this subject.';if(w.thumbnail?.source&&!$('#hero').src)setHero({url:w.thumbnail.source,artist:'Wikipedia / Wikimedia',license:''})}).catch(()=>{if(current?.id===t.id)$('#desc').textContent='Could not reach Wikipedia. Check your connection.'});exactArticleImages(t,5).then(imgs=>{if(current?.id!==t.id)return;currentImages=imgs;if(imgs[0])setHero(imgs[0])}).catch(()=>{})}function updateNav(){$('#prevBtn').disabled=sessionIndex<=0}async function nextTopic(){if(sessionIndex<session.length-1){sessionIndex++;return showTopic(session[sessionIndex],{mark:false})}const seen=new Set((await getAll()).filter(x=>x.firstSeen).map(x=>x.id)),left=TOPICS.filter(t=>!seen.has(t.id));if(!left.length){$('#card').classList.add('hidden');$('.nav-actions').classList.add('hidden');$('#endCard').classList.remove('hidden');animateEndCard();return}const t=left[Math.floor(Math.random()*left.length)];session.push(t);sessionIndex=session.length-1;await showTopic(t)}async function prevTopic(){if(sessionIndex<=0)return;sessionIndex--;await showTopic(session[sessionIndex],{mark:false})}function openSheet(html){const sh=$('#sheet');if(!html.includes('<h1>Library</h1>'))sh.classList.remove('library-open');$('#sheetContent').innerHTML=html;sh.showModal()}function expandedHeader(t){return `<h1>${t.title}</h1><div class="sheet-kicker">${categoryLabel(t)}</div><div class="detail-meta">${t.region} — ${t.era}</div>`}
 function cleanWikiHtml(html){
   const doc=new DOMParser().parseFromString(html,'text/html');
   doc.querySelectorAll('style,script,nav,aside,figure,table,.mw-editsection,.toc,.vector-toc,.navbox,.vertical-navbox,.infobox,.sidebar,.metadata,.hatnote,.shortdescription,.sistersitebox,.authority-control,.reflist,.references,.mw-references-wrap,sup.reference,ol.references,ul.gallery,.thumb,.portal,.noprint').forEach(n=>n.remove());
@@ -132,7 +242,7 @@ async function showDetails(){
   if(!rendered){let long='';try{long=await wikiLong(current)}catch{};if(!long)long=currentWiki?.extract||'';rendered=detailParagraphs(long)}
   const copy=$('#sheetContent').querySelector('.detail-copy');if(copy)copy.innerHTML=rendered
 }
-async function showImages(){openSheet(`${expandedHeader(current)}<p>Loading images…</p>`);let imgs=currentImages;if(imgs.length<8)try{imgs=await commons(current.commonsSearch,16);currentImages=imgs}catch{};$('#sheetContent').innerHTML=`${expandedHeader(current)}<div class="gallery">${imgs.map(i=>`<figure><img src="${i.url}" loading="lazy" alt=""><figcaption>${[i.artist,i.license].filter(Boolean).join(' · ')}</figcaption></figure>`).join('')}</div>`}
+async function showImages(){openSheet(`${expandedHeader(current)}<p>Loading images…</p>`);let imgs=currentImages;if(imgs.length<8)try{imgs=await exactArticleImages(current,16);currentImages=imgs}catch{};$('#sheetContent').innerHTML=`${expandedHeader(current)}<div class="gallery">${imgs.map(i=>`<figure><img src="${i.url}" loading="lazy" alt=""><figcaption>${[i.artist,i.license].filter(Boolean).join(' · ')}</figcaption></figure>`).join('')}</div>`}
 async function showLibrary(){openSheet(`<h1 class="library-title">Library</h1><div class="tabs"><button class="tab active" data-tab="all">All</button><button class="tab" data-tab="saved">Saved</button></div><div id="libraryList" class="library-list"></div>`);document.querySelectorAll('.tab').forEach(b=>b.onclick=()=>renderLibrary(b.dataset.tab));await renderLibrary('all')}async function openLibraryTopic(id){const t=TOPICS.find(x=>x.id===id);if(!t)return;$('#sheet').close();let idx=session.findIndex(x=>x.id===id);if(idx<0){session.push(t);idx=session.length-1}sessionIndex=idx;await showTopic(t,{mark:false})}async function resetSeenImmediate(){const rows=await getAll();for(const r of rows){delete r.firstSeen;delete r.lastSeen;r.timesViewed=0;await putRec(r)}session=[];sessionIndex=-1;await nextTopic()}
 function setupGestures(){let sx=0,sy=0;const el=$('#card');el.addEventListener('legacy-touchstart',e=>{sx=e.changedTouches[0].clientX;sy=e.changedTouches[0].clientY},{passive:true});el.addEventListener('legacy-touchend',e=>{const dx=e.changedTouches[0].clientX-sx,dy=e.changedTouches[0].clientY-sy;if(Math.abs(dx)>55&&Math.abs(dx)>Math.abs(dy)*1.3){dx<0?nextTopic():prevTopic()}},{passive:true});document.addEventListener('legacy-keydown',e=>{if($('#sheet').open)return;if(e.key==='ArrowRight')nextTopic();if(e.key==='ArrowLeft')prevTopic()})}
 async function init(){TOPICS=await fetch('topics.json',{cache:'no-store'}).then(r=>r.json());$('#nextBtn').onclick=()=>animateCard('next',nextTopic);$('#prevBtn').onclick=()=>animateCard('prev',prevTopic);$('#bookmarkBtn').onclick=toggleSave;$('#detailsBtn').onclick=showDetails;$('#heroButton').onclick=e=>{if(!e.target.closest('#bookmarkBtn'))showImages()};$('#libraryBtn').onclick=()=>renderLibraryFixed('all');$('#reviewBtn').onclick=()=>renderLibraryFixed('all');$('#resetBtn').onclick=resetSeen;$('#closeSheet').onclick=()=>$('#sheet').close();setupGestures();await nextTopic();if('serviceWorker'in navigator)navigator.serviceWorker.register('service-worker.js')}init();
@@ -217,7 +327,7 @@ const heroPrefetchCache=new Map();
 async function prefetchHeroFor(t){
   if(!t || heroPrefetchCache.has(t.id)) return;
   try{
-    let imgs=await commons(t.commonsSearch,1);if(!imgs.length&&t.sourceTopic)imgs=await commons(t.sourceTopic,1);
+    let imgs=await exactArticleImages(t,1);if(!imgs.length&&t.sourceTopic)imgs=await commons(t.sourceTopic,1);
     if(imgs[0]?.url){
       heroPrefetchCache.set(t.id,imgs[0].url);
       const im=new Image(); im.decoding='async'; im.src=imgs[0].url;
